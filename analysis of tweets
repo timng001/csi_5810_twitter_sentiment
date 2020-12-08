@@ -1,0 +1,457 @@
+# Import fundamentals
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
+import re
+import pycountry
+import pickle
+
+# Import nltk and download punkt, wordnet
+import nltk
+#How to Import punkt and wordnet
+'''
+nltk.download('punkt')
+nltk.download('wordnet')
+nltk.download('stopwords')
+'''
+
+# Import word_tokenize and stopwords from nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk.stem import WordNetLemmatizer, PorterStemmer
+# Gensim
+from gensim.models import Word2Vec
+
+# Import the TextBlob
+from textblob import TextBlob
+
+# Sklearn
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import classification_report
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import cross_val_score
+from sklearn.feature_extraction.text import HashingVectorizer
+from imblearn.over_sampling import SMOTE
+from imblearn.combine import SMOTETomek
+
+# Import wordcloud
+from wordcloud import WordCloud
+
+# We want to see whole content (non-truncated)
+pd.set_option('display.max_colwidth', None)
+
+# Load the tweets
+tweets_raw = pd.read_csv("tweets_raw.csv")
+
+# # Print the first five rows
+print(tweets_raw.head())
+#
+# # Print the summary statistics
+print(tweets_raw.describe())
+#
+# # Print the info
+print(tweets_raw.info())
+#__________________________________________________________________________________
+# #PREPROCESSING
+# We do not need first two columns. Let's drop them out.
+tweets_raw.drop(columns=["Unnamed: 0", "Unnamed: 0.1"], axis=1, inplace=True)
+
+# Drop duplicated rows
+tweets_raw.drop_duplicates(inplace=True)
+
+# Created at column's type should be datatime
+tweets_raw["Created at"] = pd.to_datetime(tweets_raw["Created at"])
+
+# # Print the info again
+print(tweets_raw.info())
+
+#__________________________________________________________________________________________________
+def process_tweets(tweet):
+    # Remove links
+    tweet = re.sub(r"http\S+|www\S+|https\S+", '', tweet, flags=re.MULTILINE)
+
+    # Remove mentions and hashtag
+    tweet = re.sub(r'\@\w+|\#', '', tweet)
+
+    # Tokenize the words
+    tokenized = word_tokenize(tweet)
+
+    # Remove the stop words
+    tokenized = [token for token in tokenized if token not in stopwords.words("english")]
+
+    # Lemmatize the words
+    lemmatizer = WordNetLemmatizer()
+    tokenized = [lemmatizer.lemmatize(token, pos='a') for token in tokenized]
+
+    # Remove non-alphabetic characters and keep the words contains three or more letters
+    tokenized = [token for token in tokenized if token.isalpha() and len(token) > 2]
+
+    return tokenized
+
+
+# Call the function and store the result into a new column
+tweets_raw["Processed"] = tweets_raw["Content"].str.lower().apply(process_tweets)
+
+# Print the first fifteen rows of Processed
+print(tweets_raw[["Processed"]].head(15))
+
+#_______________________________________________________________________________________________
+# Get the tweet lengths
+tweets_raw["Length"] = tweets_raw["Content"].str.len()
+
+# Get the number of words in tweets
+tweets_raw["Words"] = tweets_raw["Content"].str.split().str.len()
+
+# Display the new columns
+print(tweets_raw[["Length", "Words"]])
+
+#_________________________________________________________________________________________________
+# Fill the missing values with unknown tag
+tweets_raw["Location"].fillna("unknown", inplace=True)
+
+# Print the unique locations and number of unique locations
+print("Unique Values:",tweets_raw["Location"].unique())
+print("Unique Value count:",len(tweets_raw["Location"].unique()))
+
+#_____________________________________________________________________________________________
+def get_countries(location):
+    # If location is a country name return its alpha2 code
+    if pycountry.countries.get(name=location):
+        return pycountry.countries.get(name=location).alpha_2
+
+    # If location is a subdivisions name return the countries alpha2 code
+    try:
+        pycountry.subdivisions.lookup(location)
+        return pycountry.subdivisions.lookup(location).country_code
+    except:
+        # If the location is neither country nor subdivision return the "unknown" tag
+        return "unknown"
+
+
+# Call the function and store the country codes in the Country column
+tweets_raw["Country"] = tweets_raw["Location"].apply(get_countries)
+
+# Print the unique values
+print(tweets_raw["Country"].unique())
+
+# Print the number of unique values
+print("Number of unique values:", len(tweets_raw["Country"].unique()))
+#_______________________________________________________________________________________________
+#DATA EXPLORATION
+# Save the processed data as a csv file
+tweets_raw.to_csv("tweets_processed.csv", index=False)
+
+# Load the processed DataFrame
+tweets_processed = pd.read_csv("tweets_processed.csv", parse_dates=["Created at"])
+
+#____________________________________________________________________________________________
+# Create our contextual stop words
+tfidf_stops = ["Spiderman", "MilesMorales", "Miles Morales", "Spider-Man",
+               "Spider-Man Miles Morales","PS5","PS4","Sony","Insomniac"]
+
+# Initialize a Tf-idf Vectorizer
+vectorizer = TfidfVectorizer(max_features=5000, stop_words= tfidf_stops)
+
+# Fit and transform the vectorizer
+tfidf_matrix = vectorizer.fit_transform(tweets_processed["Processed"])
+# Let's see what we have
+print(tfidf_matrix)
+
+# Create a DataFrame for tf-idf vectors and display the first five rows
+tfidf_df = pd.DataFrame(tfidf_matrix.toarray(), columns= vectorizer.get_feature_names())
+print(tfidf_df.head())
+
+# # Print the minimum datetime
+print("Since:",tweets_processed["Created at"].min())
+
+# # Print the maximum datetime
+print("Until",tweets_processed["Created at"].max())
+
+#_______________________________________________________________________________________________
+sns.set()
+
+# Plot the histogram of hours
+sns.distplot(tweets_processed["Created at"].dt.hour, bins=24)
+plt.title("Hourly Distribution of Tweets")
+plt.show()
+
+# Print the value counts of Country column
+print(tweets_processed["Country"].value_counts())
+
+# We need to exclude unknowns
+countries = tweets_processed[tweets_processed.Country!='unknown']
+
+# Select the top 20 countries
+top_countries = countries["Country"].value_counts(sort=True).head(20)
+
+# Convert alpha2 country codes to country names and store in a list
+country_fullnames = []
+for alpha2 in top_countries.index:
+    country_fullnames.append(pycountry.countries.get(alpha_2=alpha2).name)
+
+# Visualize the top 20 countries
+plt.figure(figsize=(12,10))
+sns.barplot(y=country_fullnames,x=top_countries, orient="h", palette="RdYlGn")
+plt.xlabel("Tweet count")
+plt.ylabel("Countries")
+plt.title("Top 20 Countries")
+plt.show()
+
+#_______________________________________________________________________________________________
+# Display the most popular tweets
+print(tweets_processed.sort_values(by=["Favorites","Retweet-Count", ],
+                                     axis=0, ascending=False)[["Content","Retweet-Count","Favorites"]].head(20))
+
+
+# Create a new DataFrame called frequencies
+frequencies = pd.DataFrame(tfidf_matrix.sum(axis=0).T,index=vectorizer.get_feature_names(),columns=['total frequency'])
+
+# Sort the words by frequency
+frequencies.sort_values(by='total frequency',ascending=False, inplace=True)
+
+# Display the most 20 frequent words
+print(frequencies.head(20))
+
+# Join the indexes
+frequent_words = " ".join(frequencies.index)+" "
+
+# Initialize the word cloud
+wc = WordCloud(width = 500, height = 500, min_font_size = 10, max_words=2000, background_color ='white', stopwords= tfidf_stops)
+
+# Generate the world clouds for each type of label
+tweets_wc = wc.generate(frequent_words)
+
+# Plot the world cloud
+plt.figure(figsize = (10, 10), facecolor = None)
+plt.imshow(tweets_wc, interpolation="bilinear")
+plt.axis("off")
+plt.title("Common words in the tweets")
+plt.tight_layout(pad = 0)
+plt.show()
+
+#_________________________________________________________________________________________________
+#SENTIMENT ANALYSIS
+
+# Add polarities and subkectivities into the DataFrame by using TextBlob
+tweets_processed["Polarity"] = tweets_processed["Processed"].apply(lambda word: TextBlob(word).sentiment.polarity)
+tweets_processed["Subjectivity"] = tweets_processed["Processed"].apply(lambda word: TextBlob(word).sentiment.subjectivity)
+
+# Display the Polarity and Subjectivity columns
+print(tweets_processed[["Polarity","Subjectivity"]].head(10))
+
+
+# Define a function to classify polarities
+def analyse_polarity(polarity):
+    if polarity > 0:
+        return "Positive"
+    if polarity == 0:
+        return "Neutral"
+    if polarity < 0:
+        return "Negative"
+
+# Apply the funtion on Polarity column and add the results into a new column
+tweets_processed["Label"] = tweets_processed["Polarity"].apply(analyse_polarity)
+
+# Display the Polarity and Subjectivity Analysis
+print(tweets_processed[["Label"]].head(10))
+
+# Print the value counts of the Label column
+print(tweets_processed["Label"].value_counts())
+
+
+# Change the datatype as "category"
+tweets_processed["Label"] = tweets_processed["Label"].astype("category")
+
+#_____________________________________________________________________________________________
+# Visualize the Label counts
+sns.countplot(tweets_processed["Label"])
+plt.title("Label Counts")
+plt.show()
+
+# Visualize the Polarity scores
+plt.figure(figsize = (10, 10))
+sns.scatterplot(x="Polarity", y="Subjectivity", hue="Label", data=tweets_processed)
+plt.title("Subjectivity vs Polarity")
+plt.show()
+#_____________________________________________________________________________________________
+# Display the positive tweets
+print(tweets_processed.sort_values(by=["Polarity","Favorites","Retweet-Count", ],
+                                     axis=0, ascending=[False, False, False])[["Content","Retweet-Count","Favorites","Polarity"]].head(20))
+
+# Display the negative tweets
+print(tweets_processed.sort_values(by=["Polarity", "Favorites", "Retweet-Count"],
+                                     axis=0, ascending=[True, False, False])[["Content","Retweet-Count","Favorites","Polarity"]].head(20))
+
+def make_wordcloud(data, label):
+
+    # Initialize a Tf-idf Vectorizer
+    polarity_vectorizer = TfidfVectorizer(max_features=5000, stop_words= tfidf_stops)
+
+    # Fit and transform the vectorizer
+    tfidf_matrix_polarity = polarity_vectorizer.fit_transform(data["Processed"])
+
+    # Create a new DataFrame called frequencies
+    frequencies_polarity = pd.DataFrame(tfidf_matrix_polarity.sum(axis=0).T,index=polarity_vectorizer.get_feature_names(),columns=['total frequency'])
+
+    # Sort the words by frequency
+    frequencies_polarity.sort_values(by='total frequency',ascending=False, inplace=True)
+
+    # Join the indexes
+    frequent_words_polarity = " ".join(frequencies_polarity.index)+" "
+
+    # Initialize the word cloud
+    wc = WordCloud(width = 500, height = 500, min_font_size = 10, max_words=2000, background_color ='white', stopwords= tfidf_stops)
+
+    # Generate the world clouds for each type of label
+    tweets_polarity = wc.generate(frequent_words_polarity)
+
+    # Plot the world cloud
+    plt.figure(figsize = (10, 10), facecolor = None)
+    plt.imshow(tweets_polarity, interpolation="bilinear")
+    plt.axis("off")
+    plt.title("Common words in the " + label +" tweets")
+    plt.tight_layout(pad = 0)
+    plt.show()
+#______________________________________________________________________________________________
+# Create DataFrames for each label
+positive_popular_df = tweets_processed.sort_values(by=["Polarity","Favorites","Retweet-Count", ], axis=0, ascending=[False, False, False])[["Content","Retweet-Count","Favorites","Polarity","Processed"]].head(50)
+negative_popular_df = tweets_processed.sort_values(by=["Polarity", "Favorites", "Retweet-Count"], axis=0, ascending=[True, False, False])[["Content","Retweet-Count","Favorites","Polarity","Processed"]].head(50)
+
+# Call the function
+make_wordcloud(positive_popular_df, "positive")
+make_wordcloud(negative_popular_df, "negative")
+
+# Get the positive/negative counts by country
+positives_by_country = tweets_processed[tweets_processed.Country!='unknown'].groupby("Label")["Country"].value_counts().Negative.sort_values(ascending=False)
+negatives_by_country =tweets_processed[tweets_processed.Country!='unknown'].groupby("Label")["Country"].value_counts().Positive.sort_values(ascending=False)
+
+# Print them out
+print("Positive \n")
+print(positives_by_country)
+print("\nNegative\n")
+print(negatives_by_country)
+
+# Create a mask for top 1 countries (by tweets count)
+mask = tweets_processed["Country"].isin(top_countries.index[:10]).values
+
+# Create a new DataFrame only includes top10 country
+top_20df = tweets_processed.iloc[mask,:]
+
+# Visualize the top 20 countries
+plt.figure(figsize=(12,10))
+sns.countplot(x="Country", hue="Label", data=top_20df, order=top_20df["Country"].value_counts().index)
+plt.xlabel("Countries")
+locs, labels = plt.xticks()
+plt.xticks(locs, country_fullnames[:10])
+plt.xticks(rotation=45)
+plt.ylabel("Tweet count")
+plt.title("Top 10 Countries")
+plt.show()
+#______________________________________________________________________________________________
+positive = tweets_processed.loc[tweets_processed.Label=="Positive"]["Created at"].dt.hour
+negative = tweets_processed.loc[tweets_processed.Label=="Negative"]["Created at"].dt.hour
+
+plt.hist(positive, alpha=0.5, bins=24, label="Positive", density=True)
+plt.hist(negative, alpha=0.5, bins=24, label="Negative", density=True)
+plt.xlabel("Hour")
+plt.ylabel("PDF")
+plt.title("Hourly Distribution of Tweets")
+plt.legend(loc='upper right')
+plt.show()
+#______________________________________________________________________________________________
+# Save the DataFrame
+tweets_processed.to_csv("tweets_sentiments.csv")
+#______________________________________________________________________________________________
+#BUILD A MACHINE LEARNING MODEL
+
+# Encode the labels
+le = LabelEncoder()
+tweets_processed["Label_enc"] = le.fit_transform(tweets_processed["Label"])
+
+# Display the encoded labels
+print(tweets_processed[["Label_enc"]].head())
+
+# Select the features and the target
+X = tweets_processed['Processed']
+y = tweets_processed["Label_enc"]
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=34)
+
+#______________________________________________________________________________
+# Create the tf-idf vectorizer
+model_vectorizer = TfidfVectorizer()
+
+# First fit the vectorizer with our training set
+tfidf_train = vectorizer.fit_transform(X_train)
+
+# Now we can fit our test data with the same vectorizer
+tfidf_test = vectorizer.transform(X_test)
+
+#_______________________________________________
+#Balance Data
+balanced = SMOTE(random_state=0)
+balanced_data_X,balanced_data_y = balanced.fit_sample(tfidf_train, y_train)
+df_temp = pd.DataFrame(X_train)
+
+balanced_data_X = pd.DataFrame(data=balanced_data_X,columns=df_temp.columns)
+balanced_data_y= pd.DataFrame(data=balanced_data_y,columns=['Label_enc'])
+sns.countplot(x='Label_enc', data=balanced_data_y)
+plt.title("Label Counts")
+plt.show()
+#_________________________________________________________________________________________
+#CLASSIFICATION MODEL
+nb2 = MultinomialNB(alpha=0)
+nb2.fit(balanced_data_X, balanced_data_y.values)
+
+accuracy = cross_val_score(nb2, tfidf_test, y_test, cv=10, scoring='accuracy').max()
+print("Accuracy of Tfidf and SMOTE:",accuracy)
+print(accuracy.mean())
+
+# Predict the labels
+y_pred2 = nb2.predict(tfidf_test)
+
+# Print the Confusion Matrix
+cm2 = confusion_matrix(y_test, y_pred2)
+print("Confusion Matrix\n")
+print(cm2)
+sns.heatmap(cm2, annot=True, fmt='d',cmap='Blues')
+plt.show()
+
+# Print the Classification Report
+cr2 = classification_report(y_test, y_pred2)
+print("\n\nClassification Report\n")
+print(cr2)
+# #________________________________________________________________________________________
+# Re-Sampling SMOTETomek
+se = SMOTETomek(random_state=0)
+se_xtrain_tfidf, se_train_y = se.fit_sample(tfidf_train, y_train)
+
+print("Multinomial NB with Smoothing")
+nb2 = MultinomialNB(alpha=1)
+nb2.fit(se_xtrain_tfidf, se_train_y.values)
+
+accuracy = cross_val_score(nb2, tfidf_test, y_test, cv=10, scoring='accuracy').max()
+print("Accuracy of Tfidf and SMOTE, Smoothing and SMOTETOMEK:",accuracy)
+print(accuracy.mean())
+
+# Predict the labels
+y_pred2 = nb2.predict(tfidf_test)
+
+# Print the Confusion Matrix
+cm2 = confusion_matrix(y_test, y_pred2)
+print("Confusion Matrix\n")
+print(cm2)
+sns.heatmap(cm2, annot=True, fmt='d',cmap='rocket')
+plt.show()
+
+# Print the Classification Report
+cr2 = classification_report(y_test, y_pred2)
+print("\n\nClassification Report\n")
+print(cr2)
+
